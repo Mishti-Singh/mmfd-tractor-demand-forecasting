@@ -4,35 +4,39 @@ import numpy as np
 import pandas as pd
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
+# ==============================================================================
+# 1. LOAD AND CLEAN DATA
+# ==============================================================================
+file_path = "/content/Part3_Industry_plus_MMFD.xlsx"
 
-file_path = "DAMS 301 only MMFD Demand Part 3.xlsx"
+# Read the first two columns without forcing header assumption
+df = pd.read_excel(file_path, usecols=[0, 1])
 
-if not os.path.exists(file_path):
-    raise FileNotFoundError(
-        f"File '{file_path}' not found. Please ensure it is in the working directory."
-    )
-
-# Read Excel file
-df = pd.read_excel(file_path)
-
-# Rename columns to standard lowercase format if needed
+# Rename columns to standard names
 df.columns = ["Month", "Demand"]
 
-# Ensure proper datetime format and set frequency to Monthly Start (MS)
-df["Month"] = pd.to_datetime(df["Month"])
+# Convert to numeric/datetime and strip out header text or instruction rows
+df["Demand"] = pd.to_numeric(df["Demand"], errors="coerce")
+df["Month"] = pd.to_datetime(df["Month"], errors="coerce")
+
+# Drop any rows where Month or Demand couldn't be parsed
+df = df.dropna(subset=["Month", "Demand"]).copy()
+
+# Sort by date and set Monthly Start index
+df.sort_values("Month", inplace=True)
 df.set_index("Month", inplace=True)
 df.index.freq = "MS"
 
 print("--- Historical Data Overview ---")
-print(f"Data range: {df.index.min().strftime('%Y-%m')} to {df.index.max().strftime('%Y-%m')}")
+print(
+    f"Data range: {df.index.min().strftime('%Y-%m')} to"
+    f" {df.index.max().strftime('%Y-%m')}"
+)
 print(f"Total historical observations: {len(df)}\n")
 
 # ==============================================================================
-# 2. BUILD & FIT HOLT-WINTERS MULTIPLICATIVE SEASONAL MODEL
+# 2. FIT HOLT-WINTERS MULTIPLICATIVE MODEL
 # ==============================================================================
-# Configure Holt-Winters model matching Part 3 setup:
-# - Additive Trend
-# - Multiplicative Seasonality (12-month period)
 model = ExponentialSmoothing(
     df["Demand"],
     trend="add",
@@ -41,10 +45,7 @@ model = ExponentialSmoothing(
     initialization_method="estimated",
 )
 
-# Fit model (Statsmodels automatically optimizes alpha, beta, gamma using GRG/Maximum Likelihood)
 fit_model = model.fit()
-
-# Extract fitted historical values
 df["Fitted_Forecast"] = fit_model.fittedvalues
 
 # ==============================================================================
@@ -53,44 +54,35 @@ df["Fitted_Forecast"] = fit_model.fittedvalues
 forecast_horizon = 12
 future_forecast = fit_model.forecast(forecast_horizon)
 
-# Create DataFrame for future forecast periods (April 2012 - March 2013)
 future_dates = pd.date_range(
-    start=df.index.max() + pd.DateOffset(months=1), periods=forecast_horizon, freq="MS"
+    start=df.index.max() + pd.DateOffset(months=1),
+    periods=forecast_horizon,
+    freq="MS",
 )
 df_future = pd.DataFrame(
     {"Forecast": future_forecast.values}, index=future_dates
 )
 
 # ==============================================================================
-# 4. EVALUATE ERROR METRICS
+# 4. CALCULATE METRICS
 # ==============================================================================
-# Compute error terms on historical fitted values
 errors = df["Demand"] - df["Fitted_Forecast"]
 abs_errors = np.abs(errors)
-sq_errors = errors**2
-pct_errors = abs_errors / df["Demand"]
 
 mae = np.mean(abs_errors)
-rmse = np.sqrt(np.mean(sq_errors))
-mape = np.mean(pct_errors) * 100
-mean_error = np.mean(errors)
+rmse = np.sqrt(np.mean(errors**2))
+mape = np.mean(abs_errors / df["Demand"]) * 100
 
 print("--- Model Accuracy Metrics ---")
-print(f"Mean Error (ME):                 {mean_error:.2f}")
 print(f"Mean Absolute Error (MAE):       {mae:.2f}")
 print(f"Root Mean Squared Error (RMSE):  {rmse:.2f}")
 print(f"Mean Absolute Percentage (MAPE): {mape:.2f}%\n")
 
-print("--- 12-Month Out-of-Sample Forecast (Apr 2012 - Mar 2013) ---")
-for date, val in zip(df_future.index, df_future["Forecast"]):
-    print(f"{date.strftime('%Y-%m')}: {val:,.2f} units")
-
 # ==============================================================================
-# 5. VISUALIZATION
+# 5. VISUALIZATION & SAVE
 # ==============================================================================
-plt.figure(figsize=(14, 7), dpi=300)
+plt.figure(figsize=(12, 6), dpi=300)
 
-# Plot historical actuals, fitted values, and future forecast
 plt.plot(
     df.index,
     df["Demand"],
@@ -115,20 +107,20 @@ plt.plot(
     marker="o",
 )
 
-# Highlight October 2012 Peak
-oct_2012_val = df_future.loc["2012-10-01", "Forecast"]
-plt.annotate(
-    f"Oct 2012 Peak: {oct_2012_val:,.0f}",
-    xy=(pd.Timestamp("2012-10-01"), oct_2012_val),
-    xytext=(pd.Timestamp("2011-06-01"), oct_2012_val + 3000),
-    arrowprops=dict(facecolor="black", shrink=0.05, width=1, headwidth=6),
-    fontsize=10,
-    fontweight="bold",
-)
+# Safely annotate peak demand
+if pd.Timestamp("2012-10-01") in df_future.index:
+    oct_val = df_future.loc["2012-10-01", "Forecast"]
+    plt.annotate(
+        f"Oct 2012 Peak: {oct_val:,.0f}",
+        xy=(pd.Timestamp("2012-10-01"), oct_val),
+        xytext=(pd.Timestamp("2011-06-01"), oct_val + 3000),
+        arrowprops=dict(facecolor="black", shrink=0.05, width=1, headwidth=6),
+        fontsize=10,
+        fontweight="bold",
+    )
 
-# Graph Formatting
 plt.title(
-    "MMFD Tractor Demand Forecasting using Holt-Winters Multiplicative Method",
+    "MMFD Tractor Demand Forecasting (Holt-Winters Model)",
     fontsize=14,
     pad=15,
     fontweight="bold",
@@ -136,10 +128,10 @@ plt.title(
 plt.xlabel("Date", fontsize=12)
 plt.ylabel("Demand (Units)", fontsize=12)
 plt.grid(True, linestyle=":", alpha=0.6)
-plt.legend(loc="upper left", frameon=True)
+plt.legend(loc="upper left")
 plt.tight_layout()
 
-# Save image for GitHub repository README
+# Save plot for GitHub
 plt.savefig("holt_winters_python_forecast.png")
-print("\nPlot saved successfully as 'holt_winters_python_forecast.png'.")
+print("Successfully generated and saved 'holt_winters_python_forecast.png'!")
 plt.show()
